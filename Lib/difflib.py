@@ -27,13 +27,14 @@ Class HtmlDiff:
 """
 
 __all__ = ['get_close_matches', 'ndiff', 'restore', 'SequenceMatcher',
-           'Differ','IS_CHARACTER_JUNK', 'IS_LINE_JUNK', 'context_diff',
-           'unified_diff', 'diff_bytes', 'HtmlDiff', 'Match']
+           'Differ','IS_CHARACTER_JUNK', 'IS_LINE_JUNK', 'DEFAULT_CUTOFF',
+           'context_diff', 'unified_diff', 'diff_bytes', 'HtmlDiff', 'Match']
 
 from heapq import nlargest as _nlargest
 from collections import namedtuple as _namedtuple
 
 Match = _namedtuple('Match', 'a b size')
+DEFAULT_CUTOFF = 0.75
 
 def _calculate_ratio(matches, length):
     if length:
@@ -837,7 +838,7 @@ class Differ:
         Compare two sequences of lines; generate the resulting delta.
     """
 
-    def __init__(self, linejunk=None, charjunk=None):
+    def __init__(self, linejunk=None, charjunk=None, cutoff=DEFAULT_CUTOFF):
         """
         Construct a text differencer, with optional filters.
 
@@ -855,10 +856,15 @@ class Differ:
           module-level function `IS_CHARACTER_JUNK` may be used to filter out
           whitespace characters (a blank or tab; **note**: bad idea to include
           newline in this!).  Use of IS_CHARACTER_JUNK is recommended.
+
+        - `cutoff`: A value of a similarity score between [0, 1], below which
+          _fancy_replace won't synch up.
+
         """
 
         self.linejunk = linejunk
         self.charjunk = charjunk
+        self.cutoff = cutoff
 
     def compare(self, a, b):
         r"""
@@ -941,7 +947,7 @@ class Differ:
 
         # don't synch up unless the lines have a similarity score of at
         # least cutoff; best_ratio tracks the best score seen so far
-        best_ratio, cutoff = 0.74, 0.75
+        best_ratio = self.cutoff - 0.01
         cruncher = SequenceMatcher(self.charjunk)
         eqi, eqj = None, None   # 1st indices of equal lines (if any)
 
@@ -968,7 +974,7 @@ class Differ:
                       cruncher.quick_ratio() > best_ratio and \
                       cruncher.ratio() > best_ratio:
                     best_ratio, best_i, best_j = cruncher.ratio(), i, j
-        if best_ratio < cutoff:
+        if best_ratio < self.cutoff:
             # no non-identical "pretty close" pair
             if eqi is None:
                 # no identical pair either -- treat it as a straight replace
@@ -1105,7 +1111,6 @@ def IS_CHARACTER_JUNK(ch, ws=" \t"):
     """
 
     return ch in ws
-
 
 ########################################################################
 ###  Unified Diff
@@ -1330,7 +1335,7 @@ def diff_bytes(dfunc, a, b, fromfile=b'', tofile=b'',
     for line in lines:
         yield line.encode('ascii', 'surrogateescape')
 
-def ndiff(a, b, linejunk=None, charjunk=IS_CHARACTER_JUNK):
+def ndiff(a, b, linejunk=None, charjunk=IS_CHARACTER_JUNK, cutoff=DEFAULT_CUTOFF):
     r"""
     Compare `a` and `b` (lists of strings); return a `Differ`-style delta.
 
@@ -1347,6 +1352,9 @@ def ndiff(a, b, linejunk=None, charjunk=IS_CHARACTER_JUNK):
       the module-level function IS_CHARACTER_JUNK, which filters out
       whitespace characters (a blank or tab; note: it's a bad idea to
       include newline in this!).
+
+    - `cutoff`: A value of a similarity score between [0, 1], below which
+      _fancy_replace won't synch up.
 
     Tools/scripts/ndiff.py is a command-line front-end to this function.
 
@@ -1365,10 +1373,10 @@ def ndiff(a, b, linejunk=None, charjunk=IS_CHARACTER_JUNK):
     + tree
     + emu
     """
-    return Differ(linejunk, charjunk).compare(a, b)
+    return Differ(linejunk, charjunk, cutoff).compare(a, b)
 
 def _mdiff(fromlines, tolines, context=None, linejunk=None,
-           charjunk=IS_CHARACTER_JUNK):
+           charjunk=IS_CHARACTER_JUNK, cutoff=DEFAULT_CUTOFF):
     r"""Returns generator yielding marked up from/to side by side differences.
 
     Arguments:
@@ -1378,6 +1386,7 @@ def _mdiff(fromlines, tolines, context=None, linejunk=None,
                if None, all from/to text lines will be generated.
     linejunk -- passed on to ndiff (see ndiff documentation)
     charjunk -- passed on to ndiff (see ndiff documentation)
+    cutoff   -- passed on to ndiff (see ndiff documentation)
 
     This function returns an iterator which returns a tuple:
     (from line tuple, to line tuple, boolean flag)
@@ -1407,7 +1416,7 @@ def _mdiff(fromlines, tolines, context=None, linejunk=None,
     change_re = re.compile(r'(\++|\-+|\^+)')
 
     # create the difference iterator to generate the differences
-    diff_lines_iterator = ndiff(fromlines,tolines,linejunk,charjunk)
+    diff_lines_iterator = ndiff(fromlines,tolines,linejunk,charjunk,cutoff)
 
     def _make_line(lines, format_key, side, num_lines=[0,0]):
         """Returns line of text with user's change markup and line formatting.
@@ -1716,7 +1725,7 @@ class HtmlDiff(object):
     _default_prefix = 0
 
     def __init__(self,tabsize=8,wrapcolumn=None,linejunk=None,
-                 charjunk=IS_CHARACTER_JUNK):
+                 charjunk=IS_CHARACTER_JUNK, cutoff=DEFAULT_CUTOFF):
         """HtmlDiff instance initializer
 
         Arguments:
@@ -1731,6 +1740,7 @@ class HtmlDiff(object):
         self._wrapcolumn = wrapcolumn
         self._linejunk = linejunk
         self._charjunk = charjunk
+        self._cutoff = cutoff
 
     def make_file(self, fromlines, tolines, fromdesc='', todesc='',
                   context=False, numlines=5, *, charset='utf-8'):
@@ -1999,7 +2009,7 @@ class HtmlDiff(object):
         else:
             context_lines = None
         diffs = _mdiff(fromlines,tolines,context_lines,linejunk=self._linejunk,
-                      charjunk=self._charjunk)
+                       charjunk=self._charjunk, cutoff=self._cutoff)
 
         # set up iterator to wrap lines that exceed desired width
         if self._wrapcolumn:
